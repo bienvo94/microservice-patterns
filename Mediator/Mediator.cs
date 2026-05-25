@@ -1,96 +1,145 @@
-﻿using Microsoft.Extensions.DependencyInjection;
+﻿using System.Reflection;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
 namespace Mediator;
-internal class Mediator(MediatorRegistrationContainer container, IServiceProvider serviceProvider, ILogger<Mediator> logger) : IMediator
+
+/// <summary>
+/// Internal mediator implementation that dispatches notifications to registered handlers.
+/// Uses cached delegates for handler invocation to avoid reflection overhead at dispatch time.
+/// </summary>
+internal class Mediator(MediatorRegistrationContainer container, IServiceProvider serviceProvider, MediatorOptions options, ILogger<Mediator> logger) : IMediator
 {
+    /// <inheritdoc />
     public async Task Publish<TNotification>(TNotification notification, CancellationToken cancellationToken = default) where TNotification : INotification
     {
-        var handlers = container.FindHandlers(notification);
-        if (handlers.Any())
+        var handlerRegistrations = container.FindHandlers(notification);
+        if (handlerRegistrations.Count == 0)
         {
-            foreach (var handlerType in handlers)
+            logger.LogWarning("No handlers found for notification type {NotificationType}.", typeof(TNotification).Name);
+            return;
+        }
+
+        List<Exception>? exceptions = null;
+
+        foreach (var registration in handlerRegistrations)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            using var scope = serviceProvider.CreateScope();
+            var handler = ActivatorUtilities.CreateInstance(scope.ServiceProvider, registration.HandlerType);
+
+            if (handler is null)
             {
-                using var scope = serviceProvider.CreateScope();
-                var handler = ActivatorUtilities.CreateInstance(scope.ServiceProvider, handlerType);
+                logger.LogWarning("Handler of type {HandlerType} could not be created for notification of type {NotificationType}.",
+                    registration.HandlerType.Name, typeof(TNotification).Name);
+                continue;
+            }
 
-                if (handler is null)
+            try
+            {
+                var task = registration.InvokeHandler(handler, notification, cancellationToken);
+                await task;
+
+                logger.LogInformation("Successfully handled notification of type {NotificationType} with handler {HandlerType}.",
+                    typeof(TNotification).Name, registration.HandlerType.Name);
+            }
+            catch (Exception ex)
+            {
+                logger.LogError(ex, "Error occurred while handling notification of type {NotificationType} with handler {HandlerType}.",
+                    typeof(TNotification).Name, registration.HandlerType.Name);
+
+                if (options.ThrowOnHandlerFailure)
                 {
-                    logger.LogWarning("Handler of type {HandlerType} could not be created for notification of type {NotificationType}.",
-                        handlerType.Name, typeof(TNotification).Name);
-                    continue;
+                    exceptions ??= [];
+                    exceptions.Add(ex);
                 }
-
-                var handleMethod = handlerType.GetMethod("Handle", [notification.GetType(), typeof(CancellationToken)]);
-
-                if (handleMethod is not null)
+            }
+            finally
+            {
+                if (handler is IAsyncDisposable asyncDisposableHandler)
                 {
-                    try
-                    {
-                        if (handleMethod.Invoke(handler, [notification, cancellationToken]) is Task task)
-                        {
-                            await task;
-                        }
-                        logger.LogInformation("Successfully handled notification of type {NotificationType} with handler {HandlerType}.",
-                            typeof(TNotification).Name, handlerType.Name);
-
-                    }
-                    catch (Exception ex)
-                    {
-                        logger.LogError(ex, "Error occurred while handling notification of type {NotificationType} with handler {HandlerType}.",
-                            typeof(TNotification).Name, handlerType.Name);
-                    }
-                    finally
-                    {
-                        if (handler is IAsyncDisposable asyncDisposableHandler)
-                        {
-                            await asyncDisposableHandler.DisposeAsync();
-                        }
-                        else if (handler is IDisposable disposableHandler)
-                        {
-                            disposableHandler.Dispose();
-                        }
-                    }
+                    await asyncDisposableHandler.DisposeAsync();
                 }
-                else
+                else if (handler is IDisposable disposableHandler)
                 {
-                    throw new InvalidOperationException($"Handler {handlerType.Name} does not implement INotificationHandler<{typeof(TNotification).Name}>.");
+                    disposableHandler.Dispose();
                 }
             }
         }
-        else
+
+        if (exceptions is { Count: > 0 })
         {
-            throw new InvalidOperationException($"No handlers found for notification type {typeof(TNotification).Name}.");
+            throw new AggregateException(
+                $"One or more handlers failed for notification type {typeof(TNotification).Name}.",
+                exceptions);
         }
     }
-
 }
 
-internal class MediatorHandlerRegistration(Type notificationType, Type handlerType)
+/// <summary>
+/// Represents a registered notification handler with a cached delegate for efficient invocation.
+/// </summary>
+internal class MediatorHandlerRegistration
 {
-    public Type HandlerType { get; } = handlerType;
-    public Type NotificationType { get; } = notificationType;
+    private readonly Func<object, object, CancellationToken, Task> _cachedInvoker;
+
+    public MediatorHandlerRegistration(Type notificationType, Type handlerType)
+    {
+        NotificationType = notificationType;
+        HandlerType = handlerType;
+
+        var handleMethod = handlerType.GetMethod(
+            nameof(INotificationHandler<INotification>.Handle),
+            [notificationType, typeof(CancellationToken)])
+            ?? throw new InvalidOperationException(
+                $"Handler {handlerType.Name} does not have a Handle method for {notificationType.Name}.");
+
+        _cachedInvoker = CreateInvoker(handleMethod);
+    }
+
+    public Type HandlerType { get; }
+    public Type NotificationType { get; }
+
+    /// <summary>
+    /// Invokes the handler's Handle method using the cached delegate.
+    /// </summary>
+    public Task InvokeHandler(object handler, object notification, CancellationToken cancellationToken)
+    {
+        return _cachedInvoker(handler, notification, cancellationToken);
+    }
+
     public override string ToString()
     {
-        return $"{HandlerType.Name} handling notifications: {NotificationType}";
+        return $"{HandlerType.Name} handling notifications: {NotificationType.Name}";
+    }
+
+    private static Func<object, object, CancellationToken, Task> CreateInvoker(MethodInfo handleMethod)
+    {
+        return (handler, notification, ct) =>
+        {
+            var result = handleMethod.Invoke(handler, [notification, ct]);
+            return result is Task task ? task : Task.CompletedTask;
+        };
     }
 }
 
+/// <summary>
+/// Container that stores and retrieves handler registrations for notification types.
+/// </summary>
 internal class MediatorRegistrationContainer
 {
     private readonly Dictionary<Type, List<MediatorHandlerRegistration>> handlers = [];
 
-    internal IEnumerable<Type> FindHandlers<TNotification>(TNotification notification) where TNotification : INotification
+    internal IReadOnlyList<MediatorHandlerRegistration> FindHandlers<TNotification>(TNotification notification) where TNotification : INotification
     {
         var type = notification.GetType();
         if (handlers.TryGetValue(type, out var registrations))
         {
-            return registrations.Select(r => r.HandlerType);
+            return registrations;
         }
-        else
-        {
-            return [];
-        }
+
+        return [];
     }
 
     internal void RegisterHandler(Type notificationType, Type handlerType)
@@ -108,5 +157,4 @@ internal class MediatorRegistrationContainer
 
         registrations.Add(new MediatorHandlerRegistration(notificationType, handlerType));
     }
-
 }

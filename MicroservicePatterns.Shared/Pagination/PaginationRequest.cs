@@ -1,12 +1,12 @@
 ﻿using System.ComponentModel;
 
 namespace MicroservicePatterns.Shared.Pagination;
-public class PaginationRequest(int pageSize = 20, int pageIndex = 0)
-{
-    [property: DefaultValue(20)]
-    public int PageSize { get; set; } = pageSize;
 
-
-    [property: DefaultValue(0)]
-    public int PageIndex { get; set; } = pageIndex;
-}
+/// <summary>
+/// Represents a pagination request with page size and page index.
+/// </summary>
+/// <param name="PageSize">Number of items per page (default: 20).</param>
+/// <param name="PageIndex">Zero-based page index (default: 0).</param>
+public record PaginationRequest(
+    [property: DefaultValue(20)] int PageSize = 20,
+    [property: DefaultValue(0)] int PageIndex = 0);

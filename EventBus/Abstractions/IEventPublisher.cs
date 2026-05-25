@@ -12,6 +12,7 @@ public interface IEventPublisher
     /// </summary>
     /// <typeparam name="TEvent">The type of integration event to publish.</typeparam>
     /// <param name="event">The event to publish.</param>
+    /// <param name="cancellationToken">Optional cancellation token to cancel the publish operation.</param>
     /// <returns>A task that represents the asynchronous operation, containing true if the event was published successfully; otherwise, false.</returns>
-    Task<bool> PublishAsync<TEvent>(TEvent @event) where TEvent : IntegrationEvent;
+    Task<bool> PublishAsync<TEvent>(TEvent @event, CancellationToken cancellationToken = default) where TEvent : IntegrationEvent;
 }
