@@ -2,15 +2,35 @@
 using System.Reflection;
 
 namespace Mediator;
+
+/// <summary>
+/// Extension methods for registering the mediator and its handlers in the DI container.
+/// </summary>
 public static class RegistrationExtensions
 {
+    /// <summary>
+    /// Registers the mediator and discovers notification handlers from the specified assemblies.
+    /// </summary>
+    /// <param name="services">The service collection to register into.</param>
+    /// <param name="action">Optional configuration for handler registration (assemblies to scan).</param>
+    /// <returns>The service collection for chaining.</returns>
+    /// <example>
+    /// <code>
+    /// services.AddMediator(opts =>
+    /// {
+    ///     opts.ServiceAssemblies.Add(typeof(MyHandler).Assembly);
+    ///     opts.ThrowOnHandlerFailure = true;
+    /// });
+    /// </code>
+    /// </example>
     public static IServiceCollection AddMediator(this IServiceCollection services, Action<MediatorRegistrationOptions>? action = null)
     {
-        var options = new MediatorRegistrationOptions();
-        action?.Invoke(options);
+        var registrationOptions = new MediatorRegistrationOptions();
+        action?.Invoke(registrationOptions);
 
-        var container = services.RegisterHandlers(options.ServiceAssemblies);
+        var container = services.RegisterHandlers(registrationOptions.ServiceAssemblies);
         services.AddSingleton(container);
+        services.AddSingleton(registrationOptions.Options);
         services.AddSingleton<IMediator, Mediator>();
 
         return services;
@@ -32,22 +52,19 @@ public static class RegistrationExtensions
                 .Where(t => t.IsClass && !t.IsAbstract && t.GetInterfaces().Any(i =>
                     i.IsGenericType && i.Name == "INotificationHandler`1"));
 
-            if (notificationHandlerTypes.Any())
+            foreach (var notificationHandlerType in notificationHandlerTypes)
             {
-                foreach (var notificationHandlerType in notificationHandlerTypes)
+                var handlerInterfaces = notificationHandlerType
+                    .GetInterfaces()
+                    .Where(i => i.IsGenericType && i.GetGenericTypeDefinition().Name == "INotificationHandler`1");
+
+                foreach (var handlerInterface in handlerInterfaces)
                 {
-                    var handlerInterfaces = notificationHandlerType
-                        .GetInterfaces()
-                        .Where(i => i.IsGenericType && i.GetGenericTypeDefinition().Name == "INotificationHandler`1");
+                    if (handlerInterface.GenericTypeArguments.Length != 1)
+                        continue;
 
-                    foreach (var handlerInterface in handlerInterfaces)
-                    {
-                        if (handlerInterface.GenericTypeArguments.Length != 1)
-                            continue;
-
-                        var notificationType = handlerInterface.GenericTypeArguments[0];
-                        container.RegisterHandler(notificationType, notificationHandlerType);
-                    }
+                    var notificationType = handlerInterface.GenericTypeArguments[0];
+                    container.RegisterHandler(notificationType, notificationHandlerType);
                 }
             }
         }
@@ -56,7 +73,24 @@ public static class RegistrationExtensions
     }
 }
 
+/// <summary>
+/// Options for configuring the mediator registration, including assemblies to scan and behavior options.
+/// </summary>
 public class MediatorRegistrationOptions
 {
-    public List<Assembly> ServiceAssemblies = [];
+    /// <summary>
+    /// Gets the list of assemblies to scan for notification handler implementations.
+    /// </summary>
+    public List<Assembly> ServiceAssemblies { get; } = [];
+
+    /// <summary>
+    /// Gets or sets whether handler exceptions should be thrown as an <see cref="AggregateException"/>.
+    /// </summary>
+    public bool ThrowOnHandlerFailure
+    {
+        get => Options.ThrowOnHandlerFailure;
+        set => Options.ThrowOnHandlerFailure = value;
+    }
+
+    internal MediatorOptions Options { get; } = new();
 }

@@ -5,12 +5,12 @@ public static class KafkaEventBusExtensions
 {
     public static IHostApplicationBuilder AddKafkaProducer(this IHostApplicationBuilder builder, string connectionName)
     {
-        builder.AddKafkaProducer<string, MessageEnvelop>(connectionName,
+        builder.AddKafkaProducer<string, MessageEnvelope>(connectionName,
             configureSettings: (settings) => { 
             },
             configureBuilder: (builder) =>
             {
-                builder.SetValueSerializer(new MessageEnvelopSerializer());
+                builder.SetValueSerializer(new MessageEnvelopeSerializer());
             }
             );
 
@@ -28,33 +28,36 @@ public static class KafkaEventBusExtensions
         {
             builder.Services.AddTransient<IEventPublisher>(services => new KafkaEventPublisher(
                 topic,
-                services.GetRequiredService<IProducer<string, MessageEnvelop>>(),
+                services.GetRequiredService<IProducer<string, MessageEnvelope>>(),
                 services.GetRequiredService<ILoggerFactory>().CreateLogger($"EventPublisher<{topic}>")
                 ));
         }
     }
 
-    public static IHostApplicationBuilder AddKafkaMessageEnvelopConsumer(this IHostApplicationBuilder builder, string groupId, string connectionName = "kafka")
+    public static IHostApplicationBuilder AddKafkaMessageEnvelopeConsumer(this IHostApplicationBuilder builder, string groupId, string connectionName = "kafka")
     {
-        builder.AddKafkaConsumer<string, MessageEnvelop>(connectionName, configureSettings: (settings) => {
+        builder.AddKafkaConsumer<string, MessageEnvelope>(connectionName, configureSettings: (settings) => {
             settings.Config.GroupId = groupId;
             settings.Config.AutoOffsetReset = AutoOffsetReset.Earliest;
         },
         configureBuilder: (builder) =>
         {
-            builder.SetValueDeserializer(new MessageEnvelopDeserializer());
+            builder.SetValueDeserializer(new MessageEnvelopeDeserializer());
         }
         );
 
         return builder;
     }
 
+    /// <summary>
+    /// Registers a Kafka event consumer with the specified options.
+    /// </summary>
     public static IHostApplicationBuilder AddKafkaEventConsumer(this IHostApplicationBuilder builder, Action<EventHandlingWorkerOptions>? configureOptions = null)
     {
         var options = new EventHandlingWorkerOptions();
         configureOptions?.Invoke(options);
 
-        builder.AddKafkaMessageEnvelopConsumer(options.KafkaGroupId);
+        builder.AddKafkaMessageEnvelopeConsumer(options.KafkaGroupId);
         builder.Services.AddSingleton(options);
         builder.Services.AddSingleton(services => options.IntegrationEventFactory);
         builder.Services.AddHostedService<EventHandlingService>();
@@ -81,20 +84,27 @@ public static class KafkaEventBusExtensions
         return @event.GetType() == typeof(T1) || @event.GetType() == typeof(T2) || @event.GetType() == typeof(T3) || @event.GetType() == typeof(T4);
     }
 
-
-}
-
-internal class MessageEnvelopDeserializer : IDeserializer<MessageEnvelop>
-{
-    public MessageEnvelop Deserialize(ReadOnlySpan<byte> data, bool isNull, SerializationContext context)
+    /// <summary>
+    /// Backward-compatible extension. Use <see cref="AddKafkaMessageEnvelopeConsumer"/> instead.
+    /// </summary>
+    [Obsolete("Use AddKafkaMessageEnvelopeConsumer instead.")]
+    public static IHostApplicationBuilder AddKafkaMessageEnvelopConsumer(this IHostApplicationBuilder builder, string groupId, string connectionName = "kafka")
     {
-        return JsonSerializer.Deserialize<MessageEnvelop>(data) ?? throw new InvalidOperationException("Failed to deserialize message envelope: result is null");
+        return builder.AddKafkaMessageEnvelopeConsumer(groupId, connectionName);
     }
 }
 
-internal class MessageEnvelopSerializer : ISerializer<MessageEnvelop>
+internal class MessageEnvelopeDeserializer : IDeserializer<MessageEnvelope>
 {
-    public byte[] Serialize(MessageEnvelop data, SerializationContext context)
+    public MessageEnvelope Deserialize(ReadOnlySpan<byte> data, bool isNull, SerializationContext context)
+    {
+        return JsonSerializer.Deserialize<MessageEnvelope>(data) ?? throw new InvalidOperationException("Failed to deserialize message envelope: result is null");
+    }
+}
+
+internal class MessageEnvelopeSerializer : ISerializer<MessageEnvelope>
+{
+    public byte[] Serialize(MessageEnvelope data, SerializationContext context)
     {
         return JsonSerializer.SerializeToUtf8Bytes(data);
     }

@@ -1,13 +1,13 @@
 ﻿using EventBus.Events;
 
 namespace EventBus.Kafka;
-public class EventHandlingService(IConsumer<string, MessageEnvelop> consumer,
+public class EventHandlingService(IConsumer<string, MessageEnvelope> consumer,
     EventHandlingWorkerOptions options,
     IIntegrationEventFactory integrationEventFactory,
     IServiceScopeFactory serviceScopeFactory,
     ILoggerFactory loggerFactory) : BackgroundService
 {
-    private readonly IConsumer<string, MessageEnvelop> consumer = consumer;
+    private readonly IConsumer<string, MessageEnvelope> consumer = consumer;
     private readonly EventHandlingWorkerOptions options = options;
     private readonly IIntegrationEventFactory integrationEventFactory = integrationEventFactory;
     private readonly IServiceScopeFactory serviceScopeFactory = serviceScopeFactory;
@@ -57,7 +57,7 @@ public class EventHandlingService(IConsumer<string, MessageEnvelop> consumer,
 
     }
 
-    private async Task ProcessMessageAsync(IMediator mediator, MessageEnvelop message, CancellationToken cancellationToken)
+    private async Task ProcessMessageAsync(IMediator mediator, MessageEnvelope message, CancellationToken cancellationToken)
     {
         var @event = integrationEventFactory.CreateEvent(message.MessageTypeName, message.Message);
 

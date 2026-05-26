@@ -9,7 +9,7 @@ internal class CircuitBreakerResilienceStrategy<T>(CircuitBreakerResilienceStrat
     {
         if (_context.State == CircuitBreakerStates.Open)
         {
-            if (DateTime.UtcNow - _context.LastFailureTime < _context.DurationOfBreak)
+            if (_context.GetUtcNow() - _context.LastFailureTime < _context.DurationOfBreak)
             {
                 // We do not allow execution if the circuit is open and the break duration has not passed
                 throw new CircuitBreakerOpenException("Circuit breaker is open");
@@ -26,7 +26,7 @@ internal class CircuitBreakerResilienceStrategy<T>(CircuitBreakerResilienceStrat
         {
             var result = action(cancellationToken);
             _context.SuccessCount++;
-            _context.LastSuccessTime = DateTime.UtcNow;
+            _context.LastSuccessTime = _context.GetUtcNow();
 
             if (_context.State == CircuitBreakerStates.HalfOpen && _context.SuccessCount >= _context.SuccessThreshold)
             {
@@ -39,7 +39,7 @@ internal class CircuitBreakerResilienceStrategy<T>(CircuitBreakerResilienceStrat
         catch (Exception ex)
         {
             _context.FailureCount++;
-            _context.LastFailureTime = DateTime.UtcNow;
+            _context.LastFailureTime = _context.GetUtcNow();
 
             if (_context.State == CircuitBreakerStates.Closed && _context.FailureCount >= _context.FailureThreshold)
             {

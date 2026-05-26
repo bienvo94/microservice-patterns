@@ -7,7 +7,7 @@ namespace TestHelpers
     {
         public List<IntegrationEvent> Events { get; } = [];
 
-        public Task<bool> PublishAsync<TEvent>(TEvent @event) where TEvent : IntegrationEvent
+        public Task<bool> PublishAsync<TEvent>(TEvent @event, CancellationToken cancellationToken = default) where TEvent : IntegrationEvent
         {
             Events.Add(@event);
 
